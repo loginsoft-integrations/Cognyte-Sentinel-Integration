@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+"AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=cognyteresourcegroub22a;AccountKey=rLFsWpBkQZbeKhCcVrItg1dS/KAR64mVhVaHNMeyG1925kTz0fOKIczmL/5BoJ90cxpgqL42bclF+AStXYDQlQ==;EndpointSuffix=core.windows.net",
+"FUNCTIONS_WORKER_RUNTIME": "python",
+"luminar_base_url" : "https://demo.cyberluminar.com/",
+"tenant_id":"df620235-50d7-4400-bb7e-3b112e9b1ff4",
+"client_id" : "35abeb1c-9ea3-454c-ac74-282c712e4eda",
+"client_secret" : "FrY8Q~OgziXkdY1vWUCGC3AELQjLsPXDAzksCdd_",
+"luminar_client_id" : "loginsoft_API1",
+"luminar_client_secret" : "819db6d7-c280-4254-b376-f24de497c573",
+"luminar_account_id" : "00bed954-4b1a-4d52-97f7-2a2c51b824ff"
+  }
+}
