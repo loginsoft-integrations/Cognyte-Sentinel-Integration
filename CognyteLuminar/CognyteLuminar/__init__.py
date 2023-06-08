@@ -1,30 +1,40 @@
 """
 init.py
 
-This module provides a set of functions for communicating with the Luminar API. The main purpose of these functions is
-to retrieve and process security indicators and leaked credentials from Luminar, transform them into a compatible format
+This module provides a set of functions for communicating with the Luminar
+API. The main purpose of these functions is
+to retrieve and process security indicators and leaked credentials from
+Luminar, transform them into a compatible format
 , and save them into Azure Sentinel.
 
 Main components:
 
-LuminarManager: This class manages interactions with the Luminar API. It is responsible for requesting and refreshing
+LuminarManager: This class manages interactions with the Luminar API. It is
+responsible for requesting and refreshing
 access tokens, as well as managing the connection status.
 
-process_malware, enrich_malware_items, enrich_incident_items: These functions process malware and incident items and
+process_malware, enrich_malware_items, enrich_incident_items: These functions
+process malware and incident items and
 create enriched data for each.
 
-create_data, get_static_data: These functions transform raw indicators into a format compatible with Azure Sentinel.
+create_data, get_static_data: These functions transform raw indicators into a
+format compatible with Azure Sentinel.
 
-luminar_api_fetch: This function fetches data from the Luminar API, processes the fetched items, and manages
+luminar_api_fetch: This function fetches data from the Luminar API, processes
+the fetched items, and manages
 relationships between items.
 
-main: This function handles Luminar API requests. It initializes the Luminar manager, requests and refreshes access
-tokens, manages Luminar API calls, and handles pagination to ensure all pages of data are retrieved. A timer trigger
+main: This function handles Luminar API requests. It initializes the Luminar
+manager, requests and refreshes access
+tokens, manages Luminar API calls, and handles pagination to ensure all pages
+of data are retrieved. A timer trigger
 allows it to run at specified intervals.
 
-This module is designed for use as part of an Azure Function App and requires certain environment variables to be set.
+This module is designed for use as part of an Azure Function App and requires
+certain environment variables to be set.
 """
 
+import ipaddress
 import logging
 import os
 import re
@@ -60,7 +70,9 @@ IOC_MAPPING = {
 # There's a limit of 100 tiIndicators per request.
 MAX_TI_INDICATORS_PER_REQUEST = 100
 
-ENDPOINT = "https://graph.microsoft.com/beta/security/tiIndicators/submitTiIndicators"
+ENDPOINT = (
+    "https://graph.microsoft.com/beta/security/tiIndicators/submitTiIndicators"
+)
 LUMINAR_BASE_URL = "https://demo.cyberluminar.com/"
 SCOPE = "https://graph.microsoft.com/.default"
 tenant_id = os.getenv("TenantID")
@@ -73,6 +85,7 @@ luminar_account_id = os.getenv("LuminarAPIAccountID")
 state = StateManager(os.getenv("AzureWebJobsStorage"))
 
 TOKEN_ENDPOINT = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+
 HEADERS = {
     "content-type": "application/x-www-form-urlencoded",
     "accept": "application/json",
@@ -89,14 +102,17 @@ session = requests.Session()
 
 def get_last_saved_timestamp(date_format="%Y-%m-%d %H:%M:%S"):
     """
-    This function retrieves the last saved timestamp from the state. If no timestamp is found, it returns 0.
+    This function retrieves the last saved timestamp from the state. If no
+    timestamp is found, it returns 0.
 
     Parameters:
-    date_format (str): The format in which the date and time are represented. Default is '%Y-%m-%d %H:%M:%S' which
+    date_format (str): The format in which the date and time are represented.
+    Default is '%Y-%m-%d %H:%M:%S' which
     represents YYYY-MM-DD HH:MM:SS format.
 
     Returns:
-    int: The timestamp of the last successful run of this function as a Unix timestamp. If the function is being run for
+    int: The timestamp of the last successful run of this function as a Unix
+    timestamp. If the function is being run for
     the first time, it returns 0.
     """
     last_run_date_time = state.get()
@@ -114,7 +130,8 @@ def save_timestamp(date_format: str = "%Y-%m-%d %H:%M:%S") -> None:
     This function saves the current UTC timestamp to the state.
 
     Parameters:
-    date_format (str): The format in which the date and time are represented. Default is '%Y-%m-%d %H:%M:%S'
+    date_format (str): The format in which the date and time are represented.
+    Default is '%Y-%m-%d %H:%M:%S'
                        which represents the format as YYYY-MM-DD HH:MM:SS.
 
     Returns:
@@ -161,23 +178,20 @@ def save_sentinel_data(data: dict) -> None:
 
     try:
         response = session.post(ENDPOINT, headers=headers, json=data, timeout=TIMEOUT)
-        if response.status_code in (206,400):
-            logging.error("Sentinel responded with status code: %s", response.status_code)
-            logging.info("data causing the issue")
-            logging.info(data)
         response.raise_for_status()  # check if we got a HTTP error
     except requests.HTTPError as http_err:
         logging.error("HTTP error occurred: %s", http_err)
 
 
 def get_static_data(
-        indicator: Dict[str, Union[str, int, list, Dict[str, Any]]], value: str
+    indicator: Dict[str, Union[str, int, list, Dict[str, Any]]], value: str
 ) -> Dict[str, Union[str, int, list]]:
     """
     Generate static data dictionary based on the input indicator and value.
 
     Parameters:
-    indicator (Dict[str, Union[str, int, list, Dict[str, Any]]]): A dictionary containing
+    indicator (Dict[str, Union[str, int, list, Dict[str, Any]]]): A
+    dictionary containing
     indicator information.
     value (str): A string value indicating the type of the indicator.
 
@@ -211,28 +225,59 @@ def get_static_data(
     }
 
 
+def get_network_address(value: str) -> str:
+    """
+    Get the network address from a given CIDR value.
+
+    Args:
+        value: A string representing a CIDR notation (e.g., '192.168.0.0/24').
+
+    Returns:
+        The network address as a string.
+
+    If the given value is not a valid CIDR notation, the original value is
+    returned.
+
+    Example:
+        >>> get_network_address('192.168.0.0/24')
+        '192.168.0.0'
+        >>> get_network_address('192.168.0.1')
+        '192.168.0.1'
+    """
+    try:
+        network = ipaddress.ip_network(value)
+        return str(network.network_address)
+    except ValueError:
+        return value  # Return the original value if it's not a CIDR
+
+
 def create_data(
-        indicator: Dict[str, Union[str, int, list, Dict[str, Any]]], indicator_type: str
+    indicator: Dict[str, Union[str, int, list, Dict[str, Any]]], indicator_type: str
 ) -> Optional[Dict[str, Union[str, int, list]]]:
     """
     Create a data dictionary based on the given indicator and its type.
 
     Parameters:
-    indicator (Dict[str, Union[str, int, list, Dict[str, Any]]]): A dictionary containing
+    indicator (Dict[str, Union[str, int, list, Dict[str, Any]]]): A
+    dictionary containing
     indicator information.
     indicator_type (str): A string indicating the type of the indicator.
 
     Returns:
-    Dict[str, Union[str, int, list]]: A dictionary of data corresponding to the given
+    Dict[str, Union[str, int, list]]: A dictionary of data corresponding to
+    the given
     indicator and its type.
 
     Raises:
-    Exception: Any exception thrown during the processing of the data is caught and logged.
+    Exception: Any exception thrown during the processing of the data is
+    caught and logged.
     """
     try:
         handlers: Dict[str, Callable[[], Dict[str, str]]] = {
             "URL": lambda: {"url": indicator["indicator_value"]},
-            "IP": lambda: {"networkIPv4": indicator["indicator_value"]},
+            "IP": lambda: {
+                "networkIPv4": get_network_address(indicator["indicator_value"])
+            },
             "MD5": lambda: {
                 "fileHashValue": indicator["indicator_value"],
                 "fileHashType": "md5",
@@ -271,7 +316,8 @@ def create_data(
         logging.error("Missing key in indicator: %s", err)
     except Exception as err:
         logging.error(
-            "Unexpected error occurred while creating azure sentinel IOC Format: %s: %s",
+            "Unexpected error occurred while creating azure sentinel IOC "
+            "Format: %s: %s",
             type(err).__name__,
             err,
         )
@@ -292,16 +338,19 @@ def chunks(data: List[Any], size: int) -> Generator[List[Any], None, None]:
     List[Any]: A chunk of the original data.
     """
     for i in range(0, len(data), size):
-        yield data[i: i + size]
+        yield data[i : i + size]
 
 
 def luminar_api_fetch(all_objects: List[Dict[str, Any]]) -> None:
     """
-    Fetches data from Luminar API, identifies relationships between different objects,
-    and enriches malware and incident items with additional data based on these relationships.
+    Fetches data from Luminar API, identifies relationships between different
+    objects,
+    and enriches malware and incident items with additional data based on
+    these relationships.
 
     Parameters:
-    all_objects: A list of dictionary objects fetched from the Luminar API. Each dictionary represents
+    all_objects: A list of dictionary objects fetched from the Luminar API.
+    Each dictionary represents
                  an object and contains its various attributes.
 
     Returns:
@@ -316,7 +365,7 @@ def luminar_api_fetch(all_objects: List[Dict[str, Any]]) -> None:
 
 
 def process_objects(
-        all_objects: List[Dict[str, Any]]
+    all_objects: List[Dict[str, Any]]
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
     """
     Processes all objects and establishes relationships.
@@ -325,7 +374,8 @@ def process_objects(
     all_objects: A list of dictionary objects fetched from the Luminar API.
 
     Returns:
-    Tuple containing dictionary of items indexed by id and relationships dictionary.
+    Tuple containing dictionary of items indexed by id and relationships
+    dictionary.
     """
     item_by_id = {}
     relationships = {}
@@ -339,7 +389,7 @@ def process_objects(
 
 
 def enrich_items(
-        item_by_id: Dict[str, Any], relationships: Dict[str, List[str]]
+    item_by_id: Dict[str, Any], relationships: Dict[str, List[str]]
 ) -> None:
     """
     Enriches malware and incident items.
@@ -367,7 +417,8 @@ def enrich_items(
 
 def luminar_expiration_iocs(all_objects: List[Dict[str, Any]]) -> None:
     """
-    Enriches and processes unique Indicators of Compromise (IoCs) that have an expiration date
+    Enriches and processes unique Indicators of Compromise (IoCs) that have
+    an expiration date
     that is greater than or equal to the current date.
 
     Parameters:
@@ -381,9 +432,9 @@ def luminar_expiration_iocs(all_objects: List[Dict[str, Any]]) -> None:
         x
         for x in all_objects
         if x.get("type") == "indicator"
-           and x.get("valid_until")
-           and datetime.strptime((x.get("valid_until"))[:19], "%Y-%m-%dT%H:%M:%S")
-           >= datetime.today()
+        and x.get("valid_until")
+        and datetime.strptime((x.get("valid_until"))[:19], "%Y-%m-%dT%H:%M:%S")
+        >= datetime.today()
     ]
     enrich_malware_items({}, iocs)
 
@@ -458,14 +509,15 @@ def process_malware(children: Dict[str, Any], parent: Dict[str, Any]) -> None:
 
 
 def enrich_malware_items(
-        parent: Dict[str, Any], childrens: List[Dict[str, Any]]
+    parent: Dict[str, Any], childrens: List[Dict[str, Any]]
 ) -> None:
     """
     Enrich malware items with the data from the parent object.
 
     Parameters:
     parent (Dict[str, Any]): A dictionary representing the parent object.
-    childrens (List[Dict[str, Any]]): A list of dictionaries each representing a child object.
+    childrens (List[Dict[str, Any]]): A list of dictionaries each
+    representing a child object.
 
     Returns:
     None
@@ -479,20 +531,22 @@ def enrich_malware_items(
             chunk_data = create_data(children, children["indicator_type"])
             if not chunk_data:
                 continue
+            batch_data.append(chunk_data)
         except (KeyError, TypeError) as err:
             logging.error("Error while creating data: %s", err)
     save_batch_data(batch_data)
 
 
 def enrich_incident_items(
-        parent: Dict[str, Any], childrens: List[Dict[str, Any]]
+    parent: Dict[str, Any], childrens: List[Dict[str, Any]]
 ) -> None:
     """
     Enrich incident items with the data from the parent object.
 
     Parameters:
     parent (Dict[str, Any]): A dictionary representing the parent object.
-    childrens (List[Dict[str, Any]]): A list of dictionaries each representing a child object.
+    childrens (List[Dict[str, Any]]): A list of dictionaries each
+    representing a child object.
 
     Returns:
     None
@@ -515,7 +569,8 @@ def save_batch_data(batch_data: List[Dict[str, Any]]) -> None:
     Save batch data in chunks.
 
     Parameters:
-    batch_data (List[Dict[str, Any]]): A list of dictionaries each representing an item of batch data.
+    batch_data (List[Dict[str, Any]]): A list of dictionaries each
+    representing an item of batch data.
 
     Returns:
     None
@@ -533,24 +588,30 @@ class LuminarManager:
     """
 
     STATUS_MESSAGES = {
-        400: "Bad request. The server could not understand the request due to invalid syntax.",
-        401: "Unauthorized. The client must authenticate itself to get the requested response.",
-        403: "Forbidden. The client does not have access rights to the content.",
+        400: "Bad request. The server could not understand the request due to "
+        "invalid syntax.",
+        401: "Unauthorized. The client must authenticate itself to get the "
+        "requested response.",
+        403: "Forbidden. The client does not have access rights to the " "content.",
         404: "Not Found. The server can not find the requested resource.",
-        408: "Request Timeout. The server would like to shut down this unused connection.",
-        429: "Too Many Requests. The user has sent too many requests in a given amount of time.",
-        500: "Internal Server Error. The server has encountered a situation it doesn't know how to handle.",
-        502: "Bad Gateway. The server was acting as a gateway or proxy and received an invalid response from the "
-             "upstream server.",
-        503: "Service Unavailable. The server is not ready to handle the request.",
+        408: "Request Timeout. The server would like to shut down this unused "
+        "connection.",
+        429: "Too Many Requests. The user has sent too many requests in a "
+        "given amount of time.",
+        500: "Internal Server Error. The server has encountered a situation "
+        "it doesn't know how to handle.",
+        502: "Bad Gateway. The server was acting as a gateway or proxy and "
+        "received an invalid response from the "
+        "upstream server.",
+        503: "Service Unavailable. The server is not ready to handle the " "request.",
     }
 
     def __init__(
-            self,
-            cognyte_client_id: str,
-            cognyte_client_secret: str,
-            cognyte_account_id: str,
-            cognyte_base_url: str,
+        self,
+        cognyte_client_id: str,
+        cognyte_client_secret: str,
+        cognyte_account_id: str,
+        cognyte_base_url: str,
     ) -> None:
         self.base_url = cognyte_base_url
         self.account_id = cognyte_account_id
@@ -568,7 +629,8 @@ class LuminarManager:
         Make a request to the Luminar API.
 
         :return: Tuple[Union[bool, str], str]
-            The access token (if successful) or False (if unsuccessful), and a message indicating the status of the
+            The access token (if successful) or False (if unsuccessful),
+            and a message indicating the status of the
             request.
         """
         req_url = f"{self.base_url}/externalApi/realm/{self.account_id}/token"
@@ -596,7 +658,8 @@ class LuminarManager:
         Refresh the access token.
 
         :return: Union[bool, str]
-            The access token (if successful) or False (if unsuccessful), and a message indicating the status of the
+            The access token (if successful) or False (if unsuccessful),
+            and a message indicating the status of the
             refresh.
         """
         req_url = f"{self.base_url}/externalApi/realm/{self.account_id}/token"
@@ -617,15 +680,20 @@ def main(mytimer: func.TimerRequest) -> None:
     """
     Main function to handle Luminar API requests.
 
-    This function initializes the Luminar manager, requests and refreshes access tokens, handles Luminar API calls,
-    and handles pagination to ensure all pages of data are retrieved. It uses a timer trigger to run at specified
+    This function initializes the Luminar manager, requests and refreshes
+    access tokens, handles Luminar API calls,
+    and handles pagination to ensure all pages of data are retrieved. It uses
+    a timer trigger to run at specified
     intervals.
 
-    :param mytimer: func.TimerRequest, timer for triggering the function at specified intervals.
+    :param mytimer: func.TimerRequest, timer for triggering the function at
+    specified intervals.
 
     Note:
-    - This function will log an error message and exit if an access token cannot be retrieved or refreshed.
-    - If no more indicators are left to ingest, the function will log an informational message and stop iterating over
+    - This function will log an error message and exit if an access token
+    cannot be retrieved or refreshed.
+    - If no more indicators are left to ingest, the function will log an
+    informational message and stop iterating over
     the pages.
     - The function will save a timestamp after each run.
     """
@@ -641,7 +709,7 @@ def main(mytimer: func.TimerRequest) -> None:
 
     # Define the params with the timestamp
     params = {"limit": 100, "offset": 0, "timestamp": get_last_saved_timestamp()}
-    #params = {"limit": 100, "offset": 0}
+    # params = {"limit": 100, "offset": 0}
 
     has_more_data = True
 
@@ -665,7 +733,7 @@ def main(mytimer: func.TimerRequest) -> None:
                 timeout=TIMEOUT,
             )
             if (
-                    response.status_code == 401
+                response.status_code == 401
             ):  # Assuming 401 is the status code for an expired token
                 # If the token has expired, refresh it and continue the loop
                 access_token = luminar_manager.refresh_token()
